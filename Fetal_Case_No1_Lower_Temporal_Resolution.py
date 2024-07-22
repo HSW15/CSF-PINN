@@ -716,22 +716,22 @@ def run(cfg: ModulusConfig) -> None:
     )
     domain.add_constraint(doppler_numpy, "color_doppler_mag_1072")
     
-    inflow_var = csv_to_dict(
-       to_absolute_path("./temporal_stls/3_time_point_temporal/1082/US_threshold_1082_no_noise.csv"))
-    inflow_invar = {
-       key: value for key, value in inflow_var.items() if key in ["x", "y", "z"]
-    }
-    inflow_invar = normalize_invar(inflow_invar, center, 1./length_scale_amp, dims=3)
-    inflow_outvar = {
-       key: value*(1./vel_scale_amp) for key, value in inflow_var.items() if key in ["us_mag_1"]
-    }
-    doppler_numpy = PointwiseConstraint.from_numpy(
-       nodes,
-       inflow_invar,
-       inflow_outvar,
-       batch_size=10000,
-    )
-    domain.add_constraint(doppler_numpy, "color_doppler_mag_1082")
+    # inflow_var = csv_to_dict(
+       # to_absolute_path("./temporal_stls/3_time_point_temporal/1082/US_threshold_1082_no_noise.csv"))
+    # inflow_invar = {
+       # key: value for key, value in inflow_var.items() if key in ["x", "y", "z"]
+    # }
+    # inflow_invar = normalize_invar(inflow_invar, center, 1./length_scale_amp, dims=3)
+    # inflow_outvar = {
+       # key: value*(1./vel_scale_amp) for key, value in inflow_var.items() if key in ["us_mag_1"]
+    # }
+    # doppler_numpy = PointwiseConstraint.from_numpy(
+       # nodes,
+       # inflow_invar,
+       # inflow_outvar,
+       # batch_size=10000,
+    # )
+    # domain.add_constraint(doppler_numpy, "color_doppler_mag_1082")
     
     inflow_var = csv_to_dict(
        to_absolute_path("./temporal_stls/3_time_point_temporal/1092/US_threshold_1092_no_noise.csv"))
