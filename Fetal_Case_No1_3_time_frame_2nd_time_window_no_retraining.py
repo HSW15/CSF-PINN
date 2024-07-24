@@ -75,81 +75,6 @@ from torch.utils.data import DataLoader, Dataset
 import stl
 from stl import mesh
 import pandas as pd
-
-
-class hardbound(torch.nn.Module):
-    def __init__(self,power=None):
-        super().__init__()
-        if power is not None:
-            power=torch.tensor(power)
-            self.register_buffer("power", power, persistent=False)
-        else:
-            self.power=None
-        self.curved = nn.Tanh()
-    def forward(self,x):#Key("pre_u"), Key("pre_v"), Key("pre_w"), Key("dist_to_wall"),Key("u0"), Key("v0"), Key("w0")
-        
-        distowall = abs(x[...,3:4])
-        
-        distowall = (self.curved(distowall*3))
-        self.softplus=torch.nn.Softplus(beta=50., threshold=10.)
-        if self.power is None:
-            distowall=torch.nn.functional.relu(1.-self.softplus(1.-distowall))
-        else:
-            distowall=torch.nn.functional.relu(1.-self.softplus(1.-distowall)**self.power)
-        u=distowall*x[...,0:1] + (1-distowall)*x[...,4:5]  
-        v=distowall*x[...,1:2] + (1-distowall)*x[...,5:6] 
-        w=distowall*x[...,2:3] + (1-distowall)*x[...,6:7] 
-        
-        return torch.cat((u,v,w,distowall),-1)
-
-
-class incrorder(torch.nn.Module):
-    '''
-    cross-multiplication of variables
-    '''
-    def __init__(self,maxdisttowall,maxdisttoinlet):
-        super().__init__()
-        maxdisttowall=torch.tensor(maxdisttowall)
-        self.register_buffer("maxdisttowall", maxdisttowall, persistent=False)
-        maxdisttoinlet=torch.tensor(maxdisttoinlet)
-        self.register_buffer("maxdisttoinlet", maxdisttoinlet, persistent=False)
-        self.softplus=torch.nn.Softplus(beta=50., threshold=10.)
-    def forward(self,x):#towall,toinlet,tooutlet
-        towall=torch.nn.functional.relu(1.-self.softplus(1.-x[...,0:1]))
-        toinlet=torch.nn.functional.relu(1.-self.softplus(1.-x[...,1:2]))
-        tooutlet=torch.nn.functional.relu(1.-self.softplus(1.-x[...,2:3]))
-        towallinlet=torch.nn.functional.relu(1.-self.softplus(1.-x[...,3:4]))
-        towallsq=(1.-towall)**2.
-        toinletsq=(1.-toinlet)**2.
-        tooutletsq=(1.-tooutlet)**2.
-        towallinletsq=(1.-towallinlet)**2.
-        invalltosq=torch.cat((towallsq,toinletsq,tooutletsq,towallinletsq),-1)
-        return torch.cat((1.-invalltosq,1.-towallsq*invalltosq,1.-toinletsq*invalltosq,1.-tooutletsq*invalltosq,1.-towallinletsq*invalltosq,towall,toinlet,tooutlet,towallinlet),-1)
-
-class crossvel(torch.nn.Module):
-    '''
-    cross-multiplication of variables
-    '''
-    def __init__(self):
-        super().__init__()
-    def forward(self,x,o):
-        return torch.cross(x,o)
-
-class asymcompressibility(torch.nn.Module):
-    '''
-    cross-multiplication of variables
-    '''
-    def __init__(self,factor):
-        super().__init__()
-        factor=torch.tensor(factor)
-        self.register_buffer("factor", factor, persistent=False)
-        #curved = nn.Tanh()
-    def forward(self,x):#Key("continuity"), Key("asym_momentum_x"), Key("asym_momentum_y"), Key("asym_momentum_z"), Key("dist_to_wall")
-        #self.softplus=torch.nn.Softplus(beta=50., threshold=10.)
-        #fac=(torch.nn.functional.relu(1.-self.softplus(1.-x[...,4:5]))).detach() 
-        #fac=(curved((x[...,4:5])*6)).detach() #needs detach()
-        
-        return torch.cat((x[...,0:1],x[...,1:4]),-1)
         
 class transducer_probe(torch.nn.Module):
     def __init__(self, transducer_center):
@@ -181,40 +106,10 @@ class US_doppler_conversion(torch.nn.Module):
         
         return us_mag
 
-class meanvel(torch.nn.Module):
-    '''
-    cross-multiplication of variables
-    '''
-    def __init__(self):
-        super().__init__()
-    def forward(self,x):#veldotnormal
-        inlet_ID = (x[...,1:2] > 0.92).detach()  # if inlet is the smaller one
-        # print(x)
-        #
-        outlet_ID = (x[...,1:2]< 0.92).detach()  #if outlet is larger than the other one
-        # print(outlet_ID)
-        e_area_inlet = (2.63446e-5)/(0.005*0.005)
-        e_area_outlet = (2.82085e-5)/(0.005*0.005)
-        
-        y = (torch.sum(x[...,0:1]*inlet_ID*e_area_inlet)/torch.sum(inlet_ID,dim=0).detach()+torch.sum(x[...,0:1]*outlet_ID*e_area_outlet)/torch.sum(outlet_ID,dim=0).detach())
-        inlet_mass_flow = torch.sum(x[...,0:1]*inlet_ID*e_area_inlet)/torch.sum(inlet_ID,dim=0).detach()
-        outlet_mass_flow = torch.sum(x[...,0:1]*outlet_ID*e_area_outlet)/torch.sum(outlet_ID,dim=0).detach()
-        y=y.expand(x[...,0:1].size())
-        inlet_mass_flow=inlet_mass_flow.expand(x[...,0:1].size())
-        outlet_mass_flow=outlet_mass_flow.expand(x[...,0:1].size())
-        
-        return torch.cat((y, inlet_mass_flow,outlet_mass_flow),-1)
-
 @modulus.main(config_path="conf", config_name="conf_lr")
 def run(cfg: ModulusConfig) -> None:
-    # os.makedirs("/examples/Sean_LV/outputs/"+sys.argv[0][:-3], exist_ok = True) 
-    # if not(os.path.isfile("/examples/Sean_LV/outputs/"+sys.argv[0][:-3]+"/distance_net.0.pth")):
-        # print("Copy file ","/examples/Sean_LV/outputs/"+sys.argv[0][:-3]+"/distance_net.0.pth")
-        # shutil.copy("/examples/Sean_LV/outputs/"+sys.argv[0][:-18]+"/distance_net.0.pth","/examples/Sean_LV/outputs/"+sys.argv[0][:-3]+"/distance_net.0.pth")
     
     cfg.optimizer.lr=1e-03
-    #nu = quantity(0.0038, "kg/(m*s)")
-    #rho = quantity(1060, "kg/m^3")
     nu = quantity(0.0035, "kg/(m*s)")
     rho = quantity(1060, "kg/m^3")
     
@@ -231,7 +126,6 @@ def run(cfg: ModulusConfig) -> None:
     temp_center_hardcode = tuple(ti*-1 for ti in center_hardcode)
     transducer_point = tuple(map(sum,zip(transducer_point,temp_center_hardcode)))
     transducer_point = tuple(ti/length_scale_amp for ti in transducer_point)
-    #transducer_point = tuple(map(sum,zip(transducer_point,temp_center_hardcode)))
     
     velocity_scale = quantity(vel_scale_amp, "m/s")
     density_scale = rho
@@ -241,12 +135,6 @@ def run(cfg: ModulusConfig) -> None:
         time_scale=length_scale / velocity_scale,
         mass_scale=density_scale * (length_scale ** 3),
     )
-    maxdisttowall=1.
-    maxdisttoinlet=3.
-     # geometry scaling
-    # geometry scaling
-    
-    
     point_path = to_absolute_path("./temporal_stls")
     interior_mesh_pre = Tessellation.from_stl(
         point_path + "/Interior/P2_wk31_interior_01092_interior.stl", airtight=True
@@ -277,44 +165,6 @@ def run(cfg: ModulusConfig) -> None:
         if "area" in invar.keys():
             invar["area"] *= scale**dims
         return invar
-        
-    def normalize_invar_pre(invar, center, scale, dims=2):
-        invar["x_0"] -= center[0]
-        invar["y_0"] -= center[1]
-        invar["z_0"] -= center[2]
-        invar["x_0"] *= scale
-        invar["y_0"] *= scale
-        invar["z_0"] *= scale
-        if "area" in invar.keys():
-            invar["area"] *= scale**dims
-        return invar
-        
-    def normalize_invar_combo(invar, center, scale, dims=2):
-        invar["x"] -= center[0]
-        invar["y"] -= center[1]
-        invar["z"] -= center[2]
-        invar["x"] *= scale
-        invar["y"] *= scale
-        invar["z"] *= scale
-        invar["x_0"] -= center[0]
-        invar["y_0"] -= center[1]
-        invar["z_0"] -= center[2]
-        invar["x_0"] *= scale
-        invar["y_0"] *= scale
-        invar["z_0"] *= scale
-        if "area" in invar.keys():
-            invar["area"] *= scale**dims
-        return invar
-    
-    def normalize_invar_vel_pre(invar, center, scale, vel_scale, pres_scale, dims=2):
-        
-        invar["u_0"] *= vel_scale
-        invar["v_0"] *= vel_scale
-        invar["w_0"] *= vel_scale
-        invar["p_0"] *= pres_scale
-        if "area" in invar.keys():
-            invar["area"] *= scale**dims
-        return invar
     
     def normalize_invar_vel_2nd_time(invar, center, scale, vel_scale, pres_scale, dims=2):
         
@@ -336,25 +186,6 @@ def run(cfg: ModulusConfig) -> None:
             invar["area"] *= scale**dims
         return invar
     
-    # normalize invars
-    def normalize_velvar(invar, dims=2):
-        invar["lambda_u"] *= 2.
-        invar["lambda_v"] *= 1.
-        invar["lambda_w"] *= 6.
-        
-        return invar
-    
-    # normalize invars
-    def normalize_velvar_plane(invar, dims=2):
-        invar["lambda_u"] *= 1.0    
-        invar["lambda_v"] *= 1.0    
-        invar["lambda_w"] *= 1.0
-        
-        return invar
-    
-    
-    # center of overall geometry
-    # center of overall geometry
     center = center_hardcode
     print('Overall geometry center: ', center)
 
@@ -364,26 +195,12 @@ def run(cfg: ModulusConfig) -> None:
     interior_mesh_2nd_time = normalize_mesh(interior_mesh_2nd_time, center, 1./length_scale_amp)
     
     interior_mesh_3rd_time = normalize_mesh(interior_mesh_3rd_time, center, 1./length_scale_amp)
-    # transducer_point = normalize_mesh(transducer_point, center, 1./length_scale_amp)
     
-    # find center of inlet in original coordinate system
-
-    # scale end center the inlet center
-
-    # find inlet normal vector; should point towards aneurysm, not outwards
-
-    # make aneurysm domain
     domain = Domain()
-    
-    # params
     
     ns_1st = TemporalNavierStokes_1st_time_lagrange(nu=nd.ndim(nu), rho=nd.ndim(rho), dim=3, time=False)
     ns_2nd = TemporalNavierStokes_2nd_time_point(nu=nd.ndim(nu), rho=nd.ndim(rho), dim=3, time=False)
     ns_3rd = TemporalNavierStokes_3rd_time_point_lagrange(nu=nd.ndim(nu), rho=nd.ndim(rho), dim=3, time=False)
-    ######################     DISTANCE NET ##################
-    
-    ###############################################################
-   
    
     flow_net_pre = instantiate_arch(
         input_keys=[Key("x"), Key("y"), Key("z")],
@@ -391,7 +208,6 @@ def run(cfg: ModulusConfig) -> None:
         cfg=cfg.arch.fully_connected,
         layer_size=200,
         nr_layers=10,
-        # adaptive_activations=cfg.custom.adaptive_activations,
     )
     print("loading flow NN...")
     flow_net_pre.load_state_dict(
@@ -405,7 +221,6 @@ def run(cfg: ModulusConfig) -> None:
             print("Copying file to new directory flow net pre")
             os.makedirs("/examples/outputs/"+str(os.path.basename(__file__))[:-3],exist_ok =True) #make directory of LV_full_model_part2
             shutil.copy("/examples/outputs/P2_wk31_temporal_redone_2dopplers_redone_geometry_3time_points_redone_two_way_couple_no_intersection/flow_net_3rd_time.0.pth", flowfile_net)
-    
     
     vec_ref_mod_pre=CustomModuleArch(
         input_keys=[Key("x"),Key("y"),Key("z")],
@@ -425,7 +240,6 @@ def run(cfg: ModulusConfig) -> None:
         cfg=cfg.arch.fully_connected,
         layer_size=200,
         nr_layers=10,
-        # adaptive_activations=cfg.custom.adaptive_activations,
     )
     
     print("loading flow NN...")
@@ -460,7 +274,6 @@ def run(cfg: ModulusConfig) -> None:
         cfg=cfg.arch.fully_connected,
         layer_size=200,
         nr_layers=10,
-        # adaptive_activations=cfg.custom.adaptive_activations,
     )
     
     print("loading flow NN...")
@@ -476,7 +289,6 @@ def run(cfg: ModulusConfig) -> None:
             os.makedirs("/examples/outputs/"+str(os.path.basename(__file__))[:-3],exist_ok =True) #make directory of LV_full_model_part2
             shutil.copy("/examples/outputs/P2_wk31_temporal_redone_2dopplers_redone_geometry_3time_points_redone_two_way_couple_no_intersection/flow_net_3rd_time.0.pth", flowfile_net)
     
-    
     vec_ref_mod_3rd_time=CustomModuleArch(
         input_keys=[Key("x"),Key("y"),Key("z")],
         output_keys=[Key("r_x_2"), Key("r_y_2"), Key("r_z_2")],
@@ -488,7 +300,6 @@ def run(cfg: ModulusConfig) -> None:
         output_keys=[Key("us_mag")],
         module=US_doppler_conversion(),
     )
-    
     
     normal_dot_vel = NormalDotVec(["u", "v", "w"])
     Curl(["u", "v", "w"], curl_name=["u", "v", "w"])
@@ -514,19 +325,8 @@ def run(cfg: ModulusConfig) -> None:
             ).make_node()
     )
     
-    # distance_net.load_state_dict(
-        # torch.load(
-            # "/examples/Sean_LV/outputs/"+sys.argv[0][:-3]+"/distance_net.0.pth"
-        # ))
-    # for param in distance_net.parameters():
-        # param.requires_grad = False
-    # add constraints to solver
-    # make geometry
     domain = Domain()
     batchsizefactor=1
-    
-    #########################           PLANE PROFILE MATCHING       ################################
-    # color_doppler_threshold
     
     inflow_var = csv_to_dict(
        to_absolute_path("./temporal_stls/3_time_point_temporal/1112/inlet_profile_1112.csv"))
@@ -535,10 +335,10 @@ def run(cfg: ModulusConfig) -> None:
     }
     inflow_invar = normalize_invar(inflow_invar, center, 1./length_scale_amp, dims=3)
     inflow_outvar = {
-       key: value for key, value in inflow_var.items() if key in ["u", "v", "w", "p"]
+       key: value for key, value in inflow_var.items() if key in ["p"]
     }
     inflow_outvar = normalize_invar_vel(inflow_outvar, center, 1./length_scale_amp, (1./vel_scale_amp), (1./((vel_scale_amp**2.)*1060.)), dims=3)
-    #inflow_invar = normalize_velvar(inflow_invar, velocity_scale, dims=3)
+    
     inlet_numpy = PointwiseConstraint.from_numpy(
        nodes,
        inflow_invar,
@@ -554,10 +354,10 @@ def run(cfg: ModulusConfig) -> None:
     }
     inflow_invar = normalize_invar(inflow_invar, center, 1./length_scale_amp, dims=3)
     inflow_outvar = {
-       key: value for key, value in inflow_var.items() if key in ["u_1", "v_1", "w_1", "p_1"]
+       key: value for key, value in inflow_var.items() if key in ["p_1"]
     }
     inflow_outvar = normalize_invar_vel_2nd_time(inflow_outvar, center, 1./length_scale_amp, (1./vel_scale_amp), (1./((vel_scale_amp**2.)*1060.)), dims=3)
-    #inflow_invar = normalize_velvar(inflow_invar, velocity_scale, dims=3)
+    
     inlet_numpy = PointwiseConstraint.from_numpy(
        nodes,
        inflow_invar,
@@ -565,8 +365,6 @@ def run(cfg: ModulusConfig) -> None:
        batch_size=10000,
     )
     domain.add_constraint(inlet_numpy, "inlet_numpy_post")
-    
-    
     
     inflow_var = csv_to_dict(
        to_absolute_path("./temporal_stls/3_time_point_temporal/1102/wall_1102.csv"))
@@ -586,7 +384,6 @@ def run(cfg: ModulusConfig) -> None:
     )
     domain.add_constraint(wall, "no_slip_1102")
     
-    
     inflow_var = csv_to_dict(
        to_absolute_path("./temporal_stls/3_time_point_temporal/1112/wall_profile_1112.csv"))
     inflow_invar = {
@@ -605,37 +402,12 @@ def run(cfg: ModulusConfig) -> None:
     )
     domain.add_constraint(wall, "no_slip_1112")
     
-    # inflow_var = csv_to_dict(
-       # to_absolute_path("./stl_files_temporal/1082_P2_wk31_continuity.csv"))
-    # inflow_invar = {
-       # key: value for key, value in inflow_var.items() if key in ["x", "y", "z"]
-    # }
-    # inflow_invar = normalize_invar(inflow_invar, center, 1./length_scale_amp, dims=3)
-    # inflow_outvar = {
-       # key: value for key, value in inflow_var.items() if key in ["continuity", "momentum_x", "momentum_y", "momentum_z"]
-    # }
-    
-    # previous_velocity = PointwiseConstraint.from_numpy(
-        # nodes,
-        # inflow_invar,
-        # inflow_outvar,
-        # batch_size=10000,
-    # )
-    # domain.add_constraint(previous_velocity, "NS_eq")
-    
-    # interior
-    
     interior = PointwiseInteriorConstraint(
         nodes,
         geometry=interior_mesh_3rd_time,
         outvar={"continuity": 0, "momentum_x": 0, "momentum_y": 0, "momentum_z": 0},
         batch_size=4000,
-        # lambda_weighting={
-            # "continuity": Symbol("sdf"),
-            # "momentum_x": Symbol("sdf"),
-            # "momentum_y": Symbol("sdf"),
-            # "momentum_z": Symbol("sdf"),
-            # },
+        
     )
     domain.add_constraint(interior, "interior_1112")
     
@@ -644,12 +416,6 @@ def run(cfg: ModulusConfig) -> None:
         geometry=interior_mesh_2nd_time,
         outvar={"continuity_2nd": 0, "momentum_x_2nd": 0, "momentum_y_2nd": 0, "momentum_z_2nd": 0},
         batch_size=4000,
-        # lambda_weighting={
-            # "continuity_1st": Symbol("sdf"),
-            # "momentum_x_1st": Symbol("sdf"),
-            # "momentum_y_1st": Symbol("sdf"),
-            # "momentum_z_1st": Symbol("sdf"),
-            # },
     )
     domain.add_constraint(interior, "interior_1102")
     
@@ -688,16 +454,7 @@ def run(cfg: ModulusConfig) -> None:
     )
     domain.add_constraint(doppler_numpy, "color_doppler_mag_1112")
     
-    
-    
-    
-
-    interior_pts=interior_mesh_3rd_time.sample_interior(5000000)
-   
-    # boundary_pts=noslip_mesh_post.sample_boundary(10000)
-    # inlet_pts=inlet_mesh_post.sample_boundary(10000)
-    # outlet_pts=outlet_mesh_post.sample_boundary(10000)
-    
+    interior_pts=interior_mesh_3rd_time.sample_interior(1000000)
     
     openfoam_invar_numpy={"x":interior_pts["x"],
                           "y":interior_pts["y"],
@@ -708,7 +465,7 @@ def run(cfg: ModulusConfig) -> None:
     )
     domain.add_inferencer(openfoam_inferencer, "inf_data_1112")
     
-    interior_pts=interior_mesh_2nd_time.sample_interior(5000000)
+    interior_pts=interior_mesh_2nd_time.sample_interior(1000000)
     
     openfoam_invar_numpy={"x":interior_pts["x"],
                           "y":interior_pts["y"],
@@ -719,7 +476,7 @@ def run(cfg: ModulusConfig) -> None:
     )
     domain.add_inferencer(openfoam_inferencer, "inf_data_1102")
     
-    interior_pts=interior_mesh_pre.sample_interior(5000000)
+    interior_pts=interior_mesh_pre.sample_interior(1000000)
     
     openfoam_invar_numpy={"x":interior_pts["x"],
                           "y":interior_pts["y"],
@@ -730,37 +487,8 @@ def run(cfg: ModulusConfig) -> None:
     )
     domain.add_inferencer(openfoam_inferencer, "inf_data_1092")
     
-    # openfoam_invar_numpy={"x":boundary_pts["x"],
-                          # "y":boundary_pts["y"],
-                          # "z":boundary_pts["z"],
-                          # }
-    # openfoam_inferencer=PointwiseInferencer(
-    # nodes=nodes, invar=openfoam_invar_numpy, output_names=["u_scaled", "v_scaled", "w_scaled","p_scaled"]
-    # )
-    # domain.add_inferencer(openfoam_inferencer, "wall_data")
-    
-    
-    # openfoam_invar_numpy={"x":inlet_pts["x"],
-                          # "y":inlet_pts["y"],
-                          # "z":inlet_pts["z"],
-                          # }
-    # openfoam_inferencer=PointwiseInferencer(
-    # nodes=nodes, invar=openfoam_invar_numpy, output_names=["u_scaled", "v_scaled", "w_scaled","p_scaled"]
-    # )
-    # domain.add_inferencer(openfoam_inferencer, "inlet_data")
-    
-    # openfoam_invar_numpy={"x":outlet_pts["x"],
-                          # "y":outlet_pts["y"],
-                          # "z":outlet_pts["z"],
-                          # }
-    # openfoam_inferencer=PointwiseInferencer(
-    # nodes=nodes, invar=openfoam_invar_numpy, output_names=["u_scaled", "v_scaled", "w_scaled","p_scaled"]
-    # )
-    # domain.add_inferencer(openfoam_inferencer, "outlet_data")
-    
-    # make solver
     slv = Solver(cfg, domain)# start solver
-    slv.eval()
+    slv.solve()
 
 
 if __name__ == "__main__":
